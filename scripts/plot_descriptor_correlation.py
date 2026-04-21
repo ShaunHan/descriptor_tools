@@ -1,7 +1,7 @@
 def main():
 
     import sys
-    sys.path.insert(0, '/mnt/nfs/source/')
+    sys.path.insert(0, '/mnt/nfs/source/descriptor_tools/')
     from ase.io import read
     import numpy as np
 
