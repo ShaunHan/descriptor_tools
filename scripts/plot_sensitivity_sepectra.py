@@ -96,5 +96,31 @@ def main():
         save_interactive_path=None,
     )
 
+    """
+    evals, evecs, S, J = sensitivity_eigendecomposition(
+        atoms=atoms,
+        descriptor_fn=ref_fn,
+        active_indices=np.arange(len(atoms)),
+        eps=eps,
+        n_procs=n_procs,
+        normalize=True,
+    )
+
+    # choose a mode index
+    mode_vec = evecs[:, mode_index]
+
+    disp = mode_vector_to_displacement(
+        atoms=atoms,
+        mode_vec=mode_vec,
+        active_indices=np.arange(len(atoms)),
+        normalize_to=0.25,
+    )
+
+    atoms_plus = atoms.copy()
+    atoms_minus = atoms.copy()
+    atoms_plus.set_positions(atoms.get_positions() + disp)
+    atoms_minus.set_positions(atoms.get_positions() - disp)
+    """
+
 if __name__ == "__main__":
     main()

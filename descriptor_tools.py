@@ -677,6 +677,7 @@ def sensitivity_eigendecomposition(
     atoms: Atoms,
     descriptor_fn,
     active_indices: Optional[Sequence[int]] = None,
+    descending: bool = False,
     eps: float = 1e-4,
     n_procs: int = 1,
     normalize: bool = True,
@@ -690,11 +691,16 @@ def sensitivity_eigendecomposition(
     )
     S = J.T @ J
     evals, evecs = eigh(S)
-    order = np.argsort(evals)[::-1]
+    if descending:
+        order = np.argsort(evals)[::-1]
+    else:
+        order = np.argsort(evals)
     evals = evals[order]
     evecs = evecs[:, order]
-    if normalize and evals[0] > 0:
-        evals = evals / evals[0]
+    if normalize:
+        max_eval = evals[0] if descending else evals[-1]
+        if max_eval > 0:
+            evals = evals / max_eval
     return evals, evecs, S, J
 
 
@@ -738,6 +744,7 @@ def trace_quasi_constant_manifold(
     active_indices: Optional[Sequence[int]] = None,
     n_steps: int = 30,
     step_size: float = 0.03,
+    descending: bool = False,
     eps: float = 1e-4,
     n_procs: int = 1,
     rigid_tol=None,
@@ -751,6 +758,7 @@ def trace_quasi_constant_manifold(
             atoms=current,
             descriptor_fn=descriptor_fn,
             active_indices=active_indices,
+            descending=descending,
             eps=eps,
             n_procs=n_procs,
             normalize=True,
@@ -1039,6 +1047,7 @@ def plot_sensitivity_spectra_along_manifold(
     descriptor_fns: Dict[str, Callable],
     active_indices: Optional[Sequence[int]] = None,
     eps: float = 1e-4,
+    descending: bool = False,
     n_procs: int = 1,
     n_show: int = 10,
     skip_rigid: int = 6,
@@ -1068,10 +1077,16 @@ def plot_sensitivity_spectra_along_manifold(
                 atoms=atoms,
                 descriptor_fn=fn,
                 active_indices=active_indices,
+                descending=descending,
                 eps=eps,
                 n_procs=n_procs,
                 normalize=True,
             )
+            if descending:
+                # rigid near-zeros are at the tail, take first n_show large ones
+                tracks.append(evals[:n_show])  
+            else:
+                tracks.append(evals[skip_rigid : skip_rigid + n_show])
             tracks.append(evals[skip_rigid : skip_rigid + n_show])
 
         tracks = np.asarray(tracks)
@@ -1136,6 +1151,7 @@ def plot_sensitivity_spectra(
     atoms: Atoms,
     descriptor_fns: Dict[str, Callable],
     active_indices: Optional[Sequence[int]] = None,
+    descending: bool = False,
     eps: float = 1e-4,
     n_procs: int = 1,
     normalize: bool = True,
@@ -1153,6 +1169,7 @@ def plot_sensitivity_spectra(
             atoms=atoms,
             descriptor_fn=fn,
             active_indices=active_indices,
+            descending=descending,
             eps=eps,
             n_procs=n_procs,
             normalize=normalize,
