@@ -12,15 +12,15 @@ def main():
     )
 
     xyz_file = "/mnt/nfs/ml_training/C60/data/C60_aims_all.xyz"
-    descriptor_mode = "local"  # "local" or "global"
-    n_atoms_per_config = 60   # used only for local
+    mode = "local"  # "local" or "global"
+    n_atoms_per_config = 10   # used only for local
     n_procs = 8
     seed = 0
     desc1 = 'OM'
     desc2 = 'ACSF'
 
     calc_cfg = dict(
-        mace_model_paths="mace_global256_C60.model",
+        mace_model_paths=,#"mace_global256_C60.model",
         mace_device="cpu",
         mace_default_dtype="float64",
         mace_enable_cueq=False,
@@ -33,10 +33,13 @@ def main():
         acsf_rcut=6.0,
     )
 
-    atoms_list = read(xyz_file, index=":1")
-    descs = descriptor_catalog(mode=descriptor_mode, **calc_cfg)
+#    atoms_list = read(xyz_file, index=":1")
+    mol = molecule("NH3")
+    mol.center(vacuum=8.)
+    atoms_list = [mol]
+    descs = descriptor_catalog(mode=mode, **calc_cfg)
 
-    if descriptor_mode == "local":
+    if mode == "local":
         plot_local_pairwise_correlation(
             atoms_list=atoms_list,
             descriptor_fn_A=descs[f"{desc1.upper()}Descriptor"],
@@ -47,7 +50,6 @@ def main():
             title=f"Local {desc1.upper()} vs local {desc2.upper()} correlation",
             save_path=f"local_{desc1.lower()}_vs_{desc2.lower()}_correlation.png",
             seed=seed,
-            show_indices=True,
             save_interactive_path=f"local_{desc1.lower()}_vs_{desc2.lower()}_correlation.pkl",
         )
     else:
@@ -60,7 +62,6 @@ def main():
             title=f"Global {desc1.upper()} vs global {desc2.upper()} correlation",
             save_path=f"global_{desc1.lower()}_vs_{desc2.lower()}_correlation.png",
             seed=seed,
-            show_indices=True,
             save_interactive_path=f"global_{desc1.lower()}_vs_{desc2.lower()}_correlation.pkl",
         )
 

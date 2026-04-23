@@ -865,8 +865,8 @@ def _make_annotation_labels_local(local_labels, pairs: Sequence[Tuple[int, int]]
     return out
 
 
-def _decorate_scatter_for_hover(fig, artist, labels, descriptor_mode: str):
-    _init_hover_state(fig, [artist], [labels], descriptor_mode=descriptor_mode)
+def _decorate_scatter_for_hover(fig, artist, labels, mode: str):
+    _init_hover_state(fig, [artist], [labels], mode=mode)
     return fig
 
 
@@ -874,117 +874,89 @@ def plot_pairwise_correlation(
     atoms_list: Sequence[Atoms],
     descriptor_fn_A,
     descriptor_fn_B,
-    descriptor_mode: str = "global",
+    mode: str = "global",
     n_atoms_per_config: Optional[int] = None,
     scale_A: Optional[float] = None,
     scale_B: Optional[float] = None,
     normalize: bool = True,
     perturb: float = 0.02,
     n_noise_samples: int = 200,
-    max_pairs: int = 200000,
+    max_pairs: Optional[int] = None,
     bins: int = 200,
     n_procs: int = 1,
     seed: int = 0,
     title: str = "Correlation plot",
     save_path: Optional[str] = None,
+    show_indices: bool = False,
     save_interactive_path: Optional[str] = None,
+    n_scatter: int = 0,
 ):
-    
     """
-    Plot a 2D correlation map between pairwise descriptor distances computed from
-    two descriptors A and B.
-
-    The function compares all sampled pairs of structures (global mode) or local
-    atomic environments (local mode). For each pair (i, j), it computes:
-
-        dA = ||F_A(i) - F_A(j)|| / scale_A
-        dB = ||F_B(i) - F_B(j)|| / scale_B
-
-    and shows the distribution of these pair distances as a 2D histogram
-    (colormap). Optionally, it also attaches hover labels to sampled pairwise
-    points.
+    Generic pairwise correlation plot for global or local descriptors.
 
     Parameters
     ----------
     atoms_list : Sequence[Atoms]
-        List of ASE Atoms objects to compare.
+        Structures to compare.
 
-    descriptor_fn_A : callable
-        Function that takes one Atoms object and returns descriptor A.
-        For local mode, it must return a list of local fingerprints when called
-        with centers=... .
+    descriptor_fn_A, descriptor_fn_B : callable
+        Descriptor callables. For local mode they must accept `centers=...`.
 
-    descriptor_fn_B : callable
-        Function that takes one Atoms object and returns descriptor B.
-        Must have the same local/global behavior as descriptor_fn_A.
+    mode : {"global", "local"}
+        Global compares whole-structure descriptors.
+        Local compares sampled atomic environments.
 
-    descriptor_mode : str, default="global"
-        Either "global" or "local".
-        - "global": compare whole-structure descriptors across structures.
-        - "local": compare local atomic environments across sampled centers.
-
-    n_atoms_per_config : int or None, default=None
-        Local mode only. Number of atoms to randomly sample per structure.
+    n_atoms_per_config : int or None
+        Local mode only. Number of atoms sampled per structure.
         If None, all atoms in each structure are used.
 
-    scale_A : float or None, default=None
-        Optional normalization scale for descriptor A distances.
-        If None and normalize=True, the scale is estimated automatically from
-        random perturbations of the structures.
+    scale_A, scale_B : float or None
+        Optional normalization scales for descriptors A and B.
+        If None and normalize=True, they are estimated from random perturbations.
 
-    scale_B : float or None, default=None
-        Same as scale_A, but for descriptor B.
+    normalize : bool
+        If True, divide distances by descriptor-specific noise scales.
 
-    normalize : bool, default=True
-        If True, divide descriptor distances by a descriptor-specific noise scale
-        estimated from random small displacements.
-        This makes different descriptors easier to compare on the same plot.
+    perturb : float
+        Maximum magnitude used when estimating the noise scale by random
+        Cartesian perturbations.
 
-    perturb : float, default=0.02
-        Size of the random Cartesian perturbation used to estimate the noise scale.
-        Each atomic position is displaced randomly by up to approximately this
-        amount in Angstrom.
-        Larger values measure a more global structural change; smaller values
-        measure a more local linear response.
+    n_noise_samples : int
+        Number of perturbed samples used to estimate each descriptor's noise scale.
 
-    n_noise_samples : int, default=200
-        Number of random perturbed structures used to estimate the noise scale.
-        Larger values give a more stable estimate, but take longer.
+    max_pairs : int or None
+        Maximum number of unique pairs used to build the histogram.
+        If None, all unique pairs are used. If the full pair count is larger than
+        max_pairs, pairs are randomly subsampled without replacement.
 
-    max_pairs : int, default=200000
-        Maximum number of unique pairs to use when building the plot.
-        If the full number of possible pairs is larger than this, the function
-        randomly subsamples unique pairs without replacement.
-        This controls the computational cost, memory use, and density of the plot.
+    bins : int
+        Number of histogram bins per axis for the 2D heatmap.
 
-    bins : int, default=200
-        Number of histogram bins in each direction for the 2D histogram.
-        Larger values give finer resolution but a sparser, noisier heatmap.
+    n_procs : int
+        Number of processes used for descriptor evaluation.
 
-    n_procs : int, default=1
-        Number of processes to use for descriptor evaluation.
-        Use 1 for serial execution.
-        Larger values parallelize descriptor computation across structures
-        (global mode) or across configurations (local mode).
+    seed : int
+        Random seed used for pair subsampling, atom subsampling, and noise-scale estimation.
 
-    seed : int, default=0
-        Random seed used for pair subsampling, atom subsampling, and noise-scale
-        estimation.
-
-    title : str, default="Correlation plot"
+    title : str
         Plot title.
 
-    save_path : str or None, default=None
-        If given, save the visible plot as an image to this path.
+    save_path : str or None
+        If given, save the visible figure to this path.
 
-    show_indices : bool, default=False
-        If True, enable pair labels for hover or optional static annotations.
-        In local mode, labels are pairs of local environment identifiers.
-        In global mode, labels are pairs of structure indices.
+    show_indices : bool
+        If True, enable hover labels.
+        - If n_scatter > 0, hover labels are attached to the sampled scatter points.
+        - If n_scatter == 0, hover labels are attached to the histogram bins.
 
-    save_interactive_path : str or None, default=None
+        For bins, the hover label shows the bin count and one representative pair index.
+
+    save_interactive_path : str or None
         If given, save an interactive pickled figure object to this path.
-        Loading this pickle later and calling .show() will restore hover labels.
+
+    n_scatter : int
+        Number of sampled pair points to overlay as invisible hoverable scatter points.
+        Use 0 for a pure heatmap with bin-level hover labels.
 
     Returns
     -------
@@ -1004,11 +976,11 @@ def plot_pairwise_correlation(
         List of sampled pair index pairs used to build the plot.
     """
 
-    descriptor_mode = descriptor_mode.lower()
-    if descriptor_mode not in {"global", "local"}:
-        raise ValueError("descriptor_mode must be 'global' or 'local'")
+    mode = mode.lower()
+    if mode not in {"global", "local"}:
+        raise ValueError("mode must be 'global' or 'local'")
 
-    if descriptor_mode == "global":
+    if mode == "global":
         fps_A_raw = compute_global_descriptors(atoms_list, descriptor_fn_A, n_procs=n_procs)
         fps_B_raw = compute_global_descriptors(atoms_list, descriptor_fn_B, n_procs=n_procs)
         centers_list = None
@@ -1031,7 +1003,9 @@ def plot_pairwise_correlation(
             seed=seed + 1,
         )
         if len(fps_A_raw) != len(fps_B_raw):
-            raise RuntimeError("Local descriptor counts do not match. Use the same sampled centers.")
+            raise RuntimeError(
+                "Local descriptor counts do not match. Use the same sampled centers."
+            )
         env_labels = []
         for cfg_idx, centers in enumerate(centers_list):
             env_labels.extend([(cfg_idx, int(c)) for c in centers])
@@ -1044,22 +1018,44 @@ def plot_pairwise_correlation(
 
     if normalize:
         if scale_A is None:
-            if descriptor_mode == "global":
+            if mode == "global":
                 scale_A = _compute_noise_scale_global(
-                    atoms_list, descriptor_fn_A, max_len_A, perturb=perturb, n_samples=n_noise_samples, seed=seed
+                    atoms_list,
+                    descriptor_fn_A,
+                    max_len_A,
+                    perturb=perturb,
+                    n_samples=n_noise_samples,
+                    seed=seed,
                 )
             else:
                 scale_A = _compute_noise_scale_local(
-                    atoms_list, descriptor_fn_A, centers_list, max_len_A, perturb=perturb, n_samples=n_noise_samples, seed=seed
+                    atoms_list,
+                    descriptor_fn_A,
+                    centers_list,
+                    max_len_A,
+                    perturb=perturb,
+                    n_samples=n_noise_samples,
+                    seed=seed,
                 )
         if scale_B is None:
-            if descriptor_mode == "global":
+            if mode == "global":
                 scale_B = _compute_noise_scale_global(
-                    atoms_list, descriptor_fn_B, max_len_B, perturb=perturb, n_samples=n_noise_samples, seed=seed + 1
+                    atoms_list,
+                    descriptor_fn_B,
+                    max_len_B,
+                    perturb=perturb,
+                    n_samples=n_noise_samples,
+                    seed=seed + 1,
                 )
             else:
                 scale_B = _compute_noise_scale_local(
-                    atoms_list, descriptor_fn_B, centers_list, max_len_B, perturb=perturb, n_samples=n_noise_samples, seed=seed + 1
+                    atoms_list,
+                    descriptor_fn_B,
+                    centers_list,
+                    max_len_B,
+                    perturb=perturb,
+                    n_samples=n_noise_samples,
+                    seed=seed + 1,
                 )
     else:
         scale_A = 1.0
@@ -1092,21 +1088,98 @@ def plot_pairwise_correlation(
     for k, (i, j) in enumerate(pairs):
         dA[k] = np.linalg.norm(fps_A[i] - fps_A[j]) / scale_A
         dB[k] = np.linalg.norm(fps_B[i] - fps_B[j]) / scale_B
-    if descriptor_mode == "global":
+
+    if mode == "global":
         pair_labels = [(int(i), int(j)) for i, j in pairs]
     else:
         pair_labels = [(env_labels[i], env_labels[j]) for i, j in pairs]
 
-    fig, ax = plt.subplots(figsize=(4, 3))
+    fig, ax = plt.subplots(figsize=(6, 5))
 
-    # visible plot stays unchanged
-    h = ax.hist2d(dA, dB, bins=bins, norm=LogNorm(), cmap="viridis")
-    fig.colorbar(h[3], ax=ax, label="pair count")
+    H, xedges, yedges = np.histogram2d(dA, dB, bins=bins)
+    Hm = np.ma.masked_where(H == 0, H)
+    mesh = ax.pcolormesh(
+        xedges,
+        yedges,
+        Hm.T,
+        norm=LogNorm(vmin=1),
+        cmap="viridis",
+        shading="auto",
+    )
+    fig.colorbar(mesh, ax=ax, label="pair count")
 
     hover_artists = []
-    if save_interactive_path is not None:
-        hover_sc = _make_hover_scatter(ax, dA, dB, pair_labels)
-        hover_artists.append(hover_sc)
+
+    if show_indices or save_interactive_path is not None:
+        if n_scatter and n_scatter > 0:
+            # Hover on a random subset of individual pairs
+            if n_scatter < len(pairs):
+                idx = rng.choice(len(pairs), size=int(n_scatter), replace=False)
+            else:
+                idx = np.arange(len(pairs), dtype=int)
+
+            sc = ax.scatter(
+                dA[idx],
+                dB[idx],
+                s=20,
+                alpha=0.0,
+                linewidths=0.0,
+                edgecolors="none",
+                picker=True,
+            )
+            sc._descriptor_hover_labels = [str(pair_labels[i]) for i in idx]
+            hover_artists.append(sc)
+
+        else:
+            # Hover on each non-empty histogram bin
+            ix = np.searchsorted(xedges, dA, side="right") - 1
+            iy = np.searchsorted(yedges, dB, side="right") - 1
+
+            valid = (
+                (ix >= 0) & (ix < H.shape[0]) &
+                (iy >= 0) & (iy < H.shape[1])
+            )
+
+            bin_info = {}
+            for k, ok in enumerate(valid):
+                if not ok:
+                    continue
+                key = (int(ix[k]), int(iy[k]))
+                if key not in bin_info:
+                    bin_info[key] = {
+                        "count": 1,
+                        "example": pair_labels[k],
+                    }
+                else:
+                    bin_info[key]["count"] += 1
+
+            xh = []
+            yh = []
+            labels = []
+            for (bx, by), info in bin_info.items():
+                xh.append(0.5 * (xedges[bx] + xedges[bx + 1]))
+                yh.append(0.5 * (yedges[by] + yedges[by + 1]))
+                count = info["count"]
+                example = info["example"]
+                if show_indices:
+                    labels.append(
+                        f"pair count: {count}\none of the {count} pair indices: {example}"
+                    )
+                else:
+                    labels.append(f"pair count: {count}")
+
+            if len(xh) > 0:
+                sc = ax.scatter(
+                    xh,
+                    yh,
+                    s=20,
+                    alpha=0.0,
+                    linewidths=0.0,
+                    edgecolors="none",
+                    picker=True,
+                )
+                sc._descriptor_hover_labels = labels
+                hover_artists.append(sc)
 
     ax.set_xlabel(r"$d_A / \sigma_A$")
     ax.set_ylabel(r"$d_B / \sigma_B$")
@@ -1125,12 +1198,12 @@ def plot_pairwise_correlation(
 
 
 def plot_local_pairwise_correlation(*args, **kwargs):
-    kwargs["descriptor_mode"] = "local"
+    kwargs["mode"] = "local"
     return plot_pairwise_correlation(*args, **kwargs)
 
 
 def plot_global_pairwise_correlation(*args, **kwargs):
-    kwargs["descriptor_mode"] = "global"
+    kwargs["mode"] = "global"
     return plot_pairwise_correlation(*args, **kwargs)
 
 
