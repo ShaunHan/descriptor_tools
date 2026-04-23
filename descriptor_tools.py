@@ -236,7 +236,7 @@ class ACSFDescriptor:
     ACSF fingerprint.
 
     mode='local'  -> local ACSF at selected centers
-    mode='global' -> global averaged ACSF (flattened output)
+    mode='global' -> averaged over all atomic centers
     """
 
     def __init__(
@@ -260,8 +260,15 @@ class ACSFDescriptor:
             g4_params=self.g4_params,
             sparse=False,
         )
+
         if self.mode == "global":
-            return _to_1d_array(acsf.create(atoms))
+            fp = np.asarray(acsf.create(atoms), dtype=float)
+
+            # DScribe may return shape (n_atoms, n_features) or (n_features,)
+            if fp.ndim == 1:
+                return _to_1d_array(fp)
+
+            return _to_1d_array(np.mean(fp, axis=0))
 
         idx = _infer_centers(atoms, centers)
         fp = np.asarray(acsf.create(atoms, centers=list(map(int, idx))), dtype=float)
@@ -858,8 +865,8 @@ def _make_annotation_labels_local(local_labels, pairs: Sequence[Tuple[int, int]]
     return out
 
 
-def _decorate_scatter_for_hover(fig, artist, labels, kind: str):
-    _init_hover_state(fig, [artist], [labels], kind=kind)
+def _decorate_scatter_for_hover(fig, artist, labels, descriptor_mode: str):
+    _init_hover_state(fig, [artist], [labels], descriptor_mode=descriptor_mode)
     return fig
 
 
@@ -867,7 +874,7 @@ def plot_pairwise_correlation(
     atoms_list: Sequence[Atoms],
     descriptor_fn_A,
     descriptor_fn_B,
-    kind: str = "global",
+    descriptor_mode: str = "global",
     n_atoms_per_config: Optional[int] = None,
     scale_A: Optional[float] = None,
     scale_B: Optional[float] = None,
@@ -880,24 +887,128 @@ def plot_pairwise_correlation(
     seed: int = 0,
     title: str = "Correlation plot",
     save_path: Optional[str] = None,
-    show_indices: bool = False,
     save_interactive_path: Optional[str] = None,
 ):
+    
     """
-    Generic pairwise correlation plot for global or local descriptors.
+    Plot a 2D correlation map between pairwise descriptor distances computed from
+    two descriptors A and B.
 
-    If show_indices=True:
-      - local mode labels each point as ((cfg_i, atom_i), (cfg_j, atom_j))
-      - global mode labels each point as (cfg_i, cfg_j)
+    The function compares all sampled pairs of structures (global mode) or local
+    atomic environments (local mode). For each pair (i, j), it computes:
 
-    If save_interactive_path is given, the figure is pickled and hover labels are
-    attached instead of dense static text.
+        dA = ||F_A(i) - F_A(j)|| / scale_A
+        dB = ||F_B(i) - F_B(j)|| / scale_B
+
+    and shows the distribution of these pair distances as a 2D histogram
+    (colormap). Optionally, it also attaches hover labels to sampled pairwise
+    points.
+
+    Parameters
+    ----------
+    atoms_list : Sequence[Atoms]
+        List of ASE Atoms objects to compare.
+
+    descriptor_fn_A : callable
+        Function that takes one Atoms object and returns descriptor A.
+        For local mode, it must return a list of local fingerprints when called
+        with centers=... .
+
+    descriptor_fn_B : callable
+        Function that takes one Atoms object and returns descriptor B.
+        Must have the same local/global behavior as descriptor_fn_A.
+
+    descriptor_mode : str, default="global"
+        Either "global" or "local".
+        - "global": compare whole-structure descriptors across structures.
+        - "local": compare local atomic environments across sampled centers.
+
+    n_atoms_per_config : int or None, default=None
+        Local mode only. Number of atoms to randomly sample per structure.
+        If None, all atoms in each structure are used.
+
+    scale_A : float or None, default=None
+        Optional normalization scale for descriptor A distances.
+        If None and normalize=True, the scale is estimated automatically from
+        random perturbations of the structures.
+
+    scale_B : float or None, default=None
+        Same as scale_A, but for descriptor B.
+
+    normalize : bool, default=True
+        If True, divide descriptor distances by a descriptor-specific noise scale
+        estimated from random small displacements.
+        This makes different descriptors easier to compare on the same plot.
+
+    perturb : float, default=0.02
+        Size of the random Cartesian perturbation used to estimate the noise scale.
+        Each atomic position is displaced randomly by up to approximately this
+        amount in Angstrom.
+        Larger values measure a more global structural change; smaller values
+        measure a more local linear response.
+
+    n_noise_samples : int, default=200
+        Number of random perturbed structures used to estimate the noise scale.
+        Larger values give a more stable estimate, but take longer.
+
+    max_pairs : int, default=200000
+        Maximum number of unique pairs to use when building the plot.
+        If the full number of possible pairs is larger than this, the function
+        randomly subsamples unique pairs without replacement.
+        This controls the computational cost, memory use, and density of the plot.
+
+    bins : int, default=200
+        Number of histogram bins in each direction for the 2D histogram.
+        Larger values give finer resolution but a sparser, noisier heatmap.
+
+    n_procs : int, default=1
+        Number of processes to use for descriptor evaluation.
+        Use 1 for serial execution.
+        Larger values parallelize descriptor computation across structures
+        (global mode) or across configurations (local mode).
+
+    seed : int, default=0
+        Random seed used for pair subsampling, atom subsampling, and noise-scale
+        estimation.
+
+    title : str, default="Correlation plot"
+        Plot title.
+
+    save_path : str or None, default=None
+        If given, save the visible plot as an image to this path.
+
+    show_indices : bool, default=False
+        If True, enable pair labels for hover or optional static annotations.
+        In local mode, labels are pairs of local environment identifiers.
+        In global mode, labels are pairs of structure indices.
+
+    save_interactive_path : str or None, default=None
+        If given, save an interactive pickled figure object to this path.
+        Loading this pickle later and calling .show() will restore hover labels.
+
+    Returns
+    -------
+    dA : np.ndarray
+        Pairwise distances for descriptor A.
+
+    dB : np.ndarray
+        Pairwise distances for descriptor B.
+
+    scale_A : float
+        Noise scale used to normalize descriptor A distances.
+
+    scale_B : float
+        Noise scale used to normalize descriptor B distances.
+
+    pairs : list[tuple[int, int]]
+        List of sampled pair index pairs used to build the plot.
     """
-    kind = kind.lower()
-    if kind not in {"global", "local"}:
-        raise ValueError("kind must be 'global' or 'local'")
 
-    if kind == "global":
+    descriptor_mode = descriptor_mode.lower()
+    if descriptor_mode not in {"global", "local"}:
+        raise ValueError("descriptor_mode must be 'global' or 'local'")
+
+    if descriptor_mode == "global":
         fps_A_raw = compute_global_descriptors(atoms_list, descriptor_fn_A, n_procs=n_procs)
         fps_B_raw = compute_global_descriptors(atoms_list, descriptor_fn_B, n_procs=n_procs)
         centers_list = None
@@ -933,7 +1044,7 @@ def plot_pairwise_correlation(
 
     if normalize:
         if scale_A is None:
-            if kind == "global":
+            if descriptor_mode == "global":
                 scale_A = _compute_noise_scale_global(
                     atoms_list, descriptor_fn_A, max_len_A, perturb=perturb, n_samples=n_noise_samples, seed=seed
                 )
@@ -942,7 +1053,7 @@ def plot_pairwise_correlation(
                     atoms_list, descriptor_fn_A, centers_list, max_len_A, perturb=perturb, n_samples=n_noise_samples, seed=seed
                 )
         if scale_B is None:
-            if kind == "global":
+            if descriptor_mode == "global":
                 scale_B = _compute_noise_scale_global(
                     atoms_list, descriptor_fn_B, max_len_B, perturb=perturb, n_samples=n_noise_samples, seed=seed + 1
                 )
@@ -981,19 +1092,19 @@ def plot_pairwise_correlation(
     for k, (i, j) in enumerate(pairs):
         dA[k] = np.linalg.norm(fps_A[i] - fps_A[j]) / scale_A
         dB[k] = np.linalg.norm(fps_B[i] - fps_B[j]) / scale_B
-    if kind == "global":
+    if descriptor_mode == "global":
         pair_labels = [(int(i), int(j)) for i, j in pairs]
     else:
         pair_labels = [(env_labels[i], env_labels[j]) for i, j in pairs]
 
-    fig, ax = plt.subplots(figsize=(6, 5))
+    fig, ax = plt.subplots(figsize=(4, 3))
 
     # visible plot stays unchanged
     h = ax.hist2d(dA, dB, bins=bins, norm=LogNorm(), cmap="viridis")
     fig.colorbar(h[3], ax=ax, label="pair count")
 
     hover_artists = []
-    if show_indices or save_interactive_path is not None:
+    if save_interactive_path is not None:
         hover_sc = _make_hover_scatter(ax, dA, dB, pair_labels)
         hover_artists.append(hover_sc)
 
@@ -1014,12 +1125,12 @@ def plot_pairwise_correlation(
 
 
 def plot_local_pairwise_correlation(*args, **kwargs):
-    kwargs["kind"] = "local"
+    kwargs["descriptor_mode"] = "local"
     return plot_pairwise_correlation(*args, **kwargs)
 
 
 def plot_global_pairwise_correlation(*args, **kwargs):
-    kwargs["kind"] = "global"
+    kwargs["descriptor_mode"] = "global"
     return plot_pairwise_correlation(*args, **kwargs)
 
 
@@ -1053,7 +1164,6 @@ def plot_sensitivity_spectra_along_manifold(
     skip_rigid: int = 6,
     title: str = "Sensitivity eigenvalues along manifold",
     save_path: Optional[str] = None,
-    show_indices: bool = False,
     save_interactive_path: Optional[str] = None,
 ):
     names = list(descriptor_fns.keys())
@@ -1070,9 +1180,9 @@ def plot_sensitivity_spectra_along_manifold(
 
     for ax, (name, fn) in zip(axes, descriptor_fns.items()):
         tracks = []
-        step_indices = np.arange(len(manifold_path), dtype=int)
+        step_indices = []
 
-        for atoms in manifold_path:
+        for step_idx, atoms in enumerate(manifold_path):
             evals, _, _, _ = sensitivity_eigendecomposition(
                 atoms=atoms,
                 descriptor_fn=fn,
@@ -1088,8 +1198,10 @@ def plot_sensitivity_spectra_along_manifold(
             else:
                 tracks.append(evals[skip_rigid : skip_rigid + n_show])
             tracks.append(evals[skip_rigid : skip_rigid + n_show])
+            step_indices.append(step_idx)
 
         tracks = np.asarray(tracks)
+        step_indices = np.asarray(step_indices, dtype=int)
 
         for i in range(tracks.shape[1]):
             y = tracks[:, i]
@@ -1100,7 +1212,7 @@ def plot_sensitivity_spectra_along_manifold(
                 for s, val in zip(step_indices, y)
             ]
 
-            if save_interactive_path is not None or show_indices:
+            if save_interactive_path is not None:
                 # Invisible hover layer; does not alter visible style.
                 sc = ax.scatter(
                     step_indices,
@@ -1114,20 +1226,9 @@ def plot_sensitivity_spectra_along_manifold(
                 sc._descriptor_hover_labels = labels
                 hover_artists.append(sc)
 
-                if show_indices and save_interactive_path is None:
-                    for x, yy, lab in zip(step_indices, y, labels):
-                        ax.annotate(
-                            lab,
-                            (x, yy),
-                            textcoords="offset points",
-                            xytext=(2, 2),
-                            fontsize=5,
-                            alpha=0.85,
-                        )
-
         ax.set_title(name)
-        ax.set_xlabel("trajectory step")
-        ax.set_ylabel("normalized eigenvalue")
+        ax.set_xlabel("Trajectory step")
+        ax.set_ylabel("Normalized eigenvalue")
         ax.set_ylim(1e-16, 1.1)
 
     for ax in axes[len(names) :]:
@@ -1157,10 +1258,9 @@ def plot_sensitivity_spectra(
     normalize: bool = True,
     title: str = "Sensitivity eigenvalue spectra",
     save_path: Optional[str] = None,
-    show_indices: bool = False,
     save_interactive_path: Optional[str] = None,
 ):
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig, ax = plt.subplots(figsize=(5.5, 4))
 
     hover_artists = []
 
@@ -1182,7 +1282,7 @@ def plot_sensitivity_spectra(
 
         labels = [f"{name} | mode={k + 1}, λ={val:.2e}" for k, val in enumerate(evals)]
 
-        if save_interactive_path is not None or show_indices:
+        if save_interactive_path is not None:
             sc = ax.scatter(
                 x,
                 y,
@@ -1195,19 +1295,8 @@ def plot_sensitivity_spectra(
             sc._descriptor_hover_labels = labels
             hover_artists.append(sc)
 
-            if show_indices and save_interactive_path is None:
-                for xi, yi, lab in zip(x, y, labels):
-                    ax.annotate(
-                        lab,
-                        (xi, yi),
-                        textcoords="offset points",
-                        xytext=(2, 2),
-                        fontsize=5,
-                        alpha=0.85,
-                    )
-
-    ax.set_xlabel("mode index")
-    ax.set_ylabel("normalized eigenvalue")
+    ax.set_xlabel("Mode index")
+    ax.set_ylabel("Normalized eigenvalue")
     ax.set_title(title)
     ax.legend(frameon=False)
     plt.tight_layout()
