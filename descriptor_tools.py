@@ -290,7 +290,7 @@ class MACEDescriptor:
         device: str = "cuda",
         default_dtype: str = "float64",
         enable_cueq: bool = True,
-        invariants_only: bool = False,
+        invariants_only: bool = True,
     ):
         self.model_paths = model_paths
         self.mode = mode.lower()
@@ -367,7 +367,7 @@ def descriptor_catalog(
     mace_device: str = "cuda",
     mace_default_dtype: str = "float64",
     mace_enable_cueq: bool = True,
-    mace_invariants_only: bool = False,
+    mace_invariants_only: bool = True,
     om_rcut: float = 3.0,
     soap_rcut: float = 6.0,
     soap_n_max: int = 12,
