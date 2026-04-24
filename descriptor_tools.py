@@ -1329,6 +1329,7 @@ def plot_sensitivity_spectra(
     eps: float = 1e-4,
     n_procs: int = 1,
     normalize: bool = True,
+    skip_rigid: int = 6,
     title: str = "Sensitivity eigenvalue spectra",
     save_path: Optional[str] = None,
     save_interactive_path: Optional[str] = None,
@@ -1348,12 +1349,26 @@ def plot_sensitivity_spectra(
             normalize=normalize,
         )
 
-        x = np.arange(len(evals), dtype=int)
-        y = evals + 1e-18
-
+        if skip_rigid > 0:
+            if descending:
+                plot_evals = evals[:-skip_rigid]
+                mode_ids = np.arange(len(evals) - 1, skip_rigid - 1, -1, dtype=int)
+            else:
+                plot_evals = evals[skip_rigid:]
+                mode_ids = np.arange(skip_rigid, len(evals), dtype=int)
+        else:
+            plot_evals = evals
+            mode_ids = np.arange(len(evals), dtype=int)
+ 
+        x = np.arange(skip_rigid, skip_rigid + len(plot_evals), dtype=int)
+        y = plot_evals + 1e-18
+ 
         ax.semilogy(x, y, label=name, marker="o", ms=3, lw=1.2)
-
-        labels = [f"{name} | mode={k + 1}, λ={val:.2e}" for k, val in enumerate(evals)]
+ 
+        labels = [
+            f"{name} | mode={m}, λ={val:.2e}"
+            for m, val in zip(mode_ids, plot_evals)
+        ]
 
         if save_interactive_path is not None:
             sc = ax.scatter(
